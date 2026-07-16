@@ -408,18 +408,11 @@ extension Transport {
             throw LiveKitError(.webRTC, message: "Failed to remove track")
         }
 
-        releaseTransceiver(sender: sender)
-    }
-
-    // Try to stop the transceiver and free the resources
-    // Workaround: https://groups.google.com/g/discuss-webrtc/c/WDsGuVucBjQ?pli=1
-    private func releaseTransceiver(sender: LKRTCRtpSender) {
-        if let transceiver = _pc.transceivers.first(where: { $0.sender == sender }),
-           transceiver.mediaType == .video, !transceiver.isStopped
-        {
-            log("Stopping video transceiver", .debug)
-            transceiver.stopInternal()
-        }
+        // Do NOT stop the transceiver on unpublish. Stopping makes the sender
+        // terminal, so the SFU's next renegotiation answer fails setRemoteDescription
+        // with "Cannot disable encodings on a stopped sender" and wedges the publisher
+        // PC permanently under screen-share share/unshare churn. client-sdk-js only
+        // removes the track and lets the transceiver go inactive (reusable).
     }
 
     func dataChannel(for label: String,
