@@ -61,6 +61,10 @@ actor Transport: NSObject, Loggable {
     private var _isRestartingIce: Bool = false
     private var _latestOfferId: UInt32 = 0
 
+    // Video transceivers whose track has been removed but whose stop has been deferred out of
+    // the open offer/answer transaction. Drained by `stopTransceiversPendingStop()`.
+    private var _transceiversPendingStop: [LKRTCRtpTransceiver] = []
+
     // forbid direct access to PeerConnection
     private let _pc: LKRTCPeerConnection
 
@@ -188,6 +192,9 @@ actor Transport: NSObject, Loggable {
 
         // Actually negotiate
         func _negotiateSequence() async throws {
+            // Safe point for the deferred stops: no transaction is open, and the offer generated
+            // immediately below already describes the stopped m-lines as rejected.
+            stopTransceiversPendingStop()
             _latestOfferId += 1
             var offer = try await createOffer(for: constraints)
             if singlePCMode {
@@ -222,6 +229,9 @@ actor Transport: NSObject, Loggable {
         // the worker-thread teardown (ICE use-after-free, AVAudioEngine
         // deallocation assertion). Close() handles full cleanup on its own.
         _pc.close()
+
+        // Close() released every transceiver; the deferred stops are moot.
+        _transceiversPendingStop.removeAll()
     }
 }
 
@@ -333,6 +343,25 @@ extension Transport: LKRTCPeerConnectionDelegate {
 // MARK: - Private
 
 private extension Transport {
+    /// Stops the transceivers queued by ``remove(track:)``.
+    ///
+    /// Only ever called from `createAndSendOffer`'s negotiate sequence, where `.stable` means no
+    /// answer can be applied against a sender this is about to make terminal. If the transport is
+    /// not stable the queue is left intact for the next negotiation — every `remove(track:)` is
+    /// followed by a `publisherShouldNegotiate()`, and `_reNegotiate` guarantees one more offer
+    /// after any answer, so a queued transceiver is always drained on the next offer.
+    func stopTransceiversPendingStop() {
+        guard signalingState == .stable, !_transceiversPendingStop.isEmpty else { return }
+
+        let pending = _transceiversPendingStop
+        _transceiversPendingStop = []
+
+        for transceiver in pending where !transceiver.isStopped {
+            log("Stopping video transceiver", .debug)
+            transceiver.stopInternal()
+        }
+    }
+
     func createOffer(for constraints: [String: String]? = nil) async throws -> LKRTCSessionDescription {
         let mediaConstraints = LKRTCMediaConstraints(mandatoryConstraints: constraints,
                                                      optionalConstraints: nil)
@@ -408,17 +437,34 @@ extension Transport {
             throw LiveKitError(.webRTC, message: "Failed to remove track")
         }
 
-        releaseTransceiver(sender: sender)
+        deferReleaseOfTransceiver(sender: sender)
     }
 
-    // Try to stop the transceiver and free the resources
+    // Queue the transceiver to be stopped, but do NOT stop it here.
+    //
+    // The stop frees the transceiver's native resources and is the fix for the ~50 MB-per-cycle
+    // leak in issue #420 — it has to happen. What it must not do is happen *inside* an open
+    // offer/answer transaction: stopping makes the sender terminal, and a terminal sender cannot
+    // have its encodings changed. With an offer already in flight the SFU's answer still
+    // describes that sender, so applying it fails setRemoteDescription with "Cannot disable
+    // encodings on a stopped sender" and strands the publisher PeerConnection in .haveLocalOffer
+    // with no way back — the screen-share share/unshare wedge.
+    //
+    // The window is roughly [negotiation debounce, debounce + RTT] wide, so it is unreachable on
+    // loopback and routinely hit against a real SFU.
+    //
+    // `stopTransceiversPendingStop()` drains this queue in `createAndSendOffer`, once the
+    // transport is back in .stable and immediately before the next offer is generated. The stop
+    // therefore always precedes the offer that describes its m-line as rejected, so that offer
+    // and the answer to it agree and the window never opens.
+    //
     // Workaround: https://groups.google.com/g/discuss-webrtc/c/WDsGuVucBjQ?pli=1
-    private func releaseTransceiver(sender: LKRTCRtpSender) {
+    private func deferReleaseOfTransceiver(sender: LKRTCRtpSender) {
         if let transceiver = _pc.transceivers.first(where: { $0.sender == sender }),
            transceiver.mediaType == .video, !transceiver.isStopped
         {
-            log("Stopping video transceiver", .debug)
-            transceiver.stopInternal()
+            log("Deferring stop of video transceiver", .debug)
+            _transceiversPendingStop.append(transceiver)
         }
     }
 
