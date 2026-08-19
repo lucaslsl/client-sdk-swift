@@ -539,6 +539,46 @@ public class AudioManager: Loggable {
 }
 
 public extension AudioManager {
+    /// Sets the audio input device and reports whether the switch actually took effect.
+    ///
+    /// ``inputDevice`` is fire-and-forget: the assignment can be accepted while the device never
+    /// binds, leaving capture on the previously selected device with no error surfaced anywhere.
+    /// Use this variant when the outcome must be observable.
+    ///
+    /// - Parameter device: The device to capture from.
+    /// - Returns: `true` if the device was switched, `false` if it was not, or if the platform does
+    ///   not support device switching.
+    /// - SeeAlso: ``inputDevice``
+    @discardableResult
+    func trySet(inputDevice device: AudioDevice) -> Bool {
+        #if os(macOS)
+        RTC.audioDeviceModule.trySetInputDevice(device._ioDevice)
+        #else
+        false
+        #endif
+    }
+
+    /// Sets the audio output device and reports whether the switch actually took effect.
+    ///
+    /// ``outputDevice`` is fire-and-forget: the assignment can be accepted while the device never
+    /// binds, leaving playout on the previously selected device with no error surfaced anywhere.
+    /// Use this variant when the outcome must be observable.
+    ///
+    /// - Parameter device: The device to play out to.
+    /// - Returns: `true` if the device was switched, `false` if it was not, or if the platform does
+    ///   not support device switching.
+    /// - SeeAlso: ``outputDevice``
+    @discardableResult
+    func trySet(outputDevice device: AudioDevice) -> Bool {
+        #if os(macOS)
+        RTC.audioDeviceModule.trySetOutputDevice(device._ioDevice)
+        #else
+        false
+        #endif
+    }
+}
+
+public extension AudioManager {
     /// Add an ``AudioRenderer`` to receive pcm buffers from local input (mic).
     /// Only ``AudioRenderer/render(pcmBuffer:)`` will be called.
     /// Usage: `AudioManager.shared.add(localAudioRenderer: localRenderer)`
