@@ -64,8 +64,12 @@ connection before the required local server was started. Two later attempts
 failed only experimental remote-amplitude ordering assertions because Opus
 tails and callback boundaries are not deterministic signal-frame boundaries;
 that flaky observation was replaced by a deterministic queue-reservation order
-test. Per the finalization instruction, that last test-only replacement was not
-rerun after being added and remains the first focused check for Phase 3.
+test. The coordinator then ran that replacement individually on 2026-08-24; it
+passed 1 test in 1 suite with 0 failures:
+
+```text
+swift test --filter ManualMicrophoneCaptureTests/framesBelowCapacityReserveInSubmissionOrder
+```
 
 Directly affected existing regressions passed individually:
 
@@ -95,6 +99,5 @@ No hardware, acoustic, two-person, two-machine, or perceptual checks ran. Those
 remain user-owned under the authoritative plan. The player-node completion
 callback uses `StateSync` for queue accounting, matching the SDK's synchronized
 state convention; Phase 8 should measure queue behavior under the application's
-processing-worker cadence. Phase 3 should first run the added deterministic
-reservation-order test, then begin the standalone WebRTC APM feasibility gate
-without adding Blixel route or UID concepts to the SDK.
+processing-worker cadence. Phase 3 should begin with the standalone WebRTC APM
+feasibility gate without adding Blixel route or UID concepts to the SDK.
