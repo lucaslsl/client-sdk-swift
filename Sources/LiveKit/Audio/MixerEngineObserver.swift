@@ -47,6 +47,11 @@ public final class MixerEngineObserver: AudioEngineObserver, Loggable {
         set { _state.mutate { $0.micMixerNode.outputVolume = newValue } }
     }
 
+    /// The current bounded manual microphone queue state.
+    public var manualMicrophoneCaptureMetrics: ManualMicrophoneCaptureMetrics {
+        _state.read { $0.manualMicrophoneQueue.metrics }
+    }
+
     /// Adjust the volume of sound player audio sent to remote participants. Range is 0.0 ~ 1.0.
     public var soundPlayerVolume: Float {
         get { _state.read { $0.soundPlayerNodes.mixerNode.outputVolume } }
@@ -85,7 +90,10 @@ public final class MixerEngineObserver: AudioEngineObserver, Loggable {
         var isInputConnected: Bool = false
 
         // Cached converters
-        var converters: [AVAudioFormat: AudioConverter] = [:]
+        var appAudioConverters: [AVAudioFormat: AudioConverter] = [:]
+        var microphoneAudioConverters: [AVAudioFormat: AudioConverter] = [:]
+
+        var manualMicrophoneQueue = ManualMicrophoneQueueState()
 
         // Reference to engine format
         var playerNodeFormat: AVAudioFormat?
@@ -169,6 +177,14 @@ public final class MixerEngineObserver: AudioEngineObserver, Loggable {
         engine.detach(micMixerNode)
         engine.detach(soundPlayerNodes)
 
+        _state.mutate {
+            $0.isInputConnected = false
+            $0.playerNodeFormat = nil
+            $0.appAudioConverters.removeAll()
+            $0.microphoneAudioConverters.removeAll()
+            $0.manualMicrophoneQueue.reset()
+        }
+
         return nextResult ?? 0
     }
 
@@ -222,10 +238,12 @@ public final class MixerEngineObserver: AudioEngineObserver, Loggable {
         _state.mutate {
             if let previousEngineFormat = $0.playerNodeFormat, previousEngineFormat != format {
                 // Clear cached converters when engine format changes
-                $0.converters.removeAll()
+                $0.appAudioConverters.removeAll()
+                $0.microphoneAudioConverters.removeAll()
             }
             $0.playerNodeFormat = playerNodeFormat
             $0.isInputConnected = true
+            $0.manualMicrophoneQueue.reset(sampleRate: playerNodeFormat.sampleRate)
         }
 
         // Invoke next
@@ -255,6 +273,10 @@ public final class MixerEngineObserver: AudioEngineObserver, Loggable {
         appNode.reset()
         soundPlayerNodes.reset()
 
+        _state.mutate {
+            $0.manualMicrophoneQueue.reset(sampleRate: $0.playerNodeFormat?.sampleRate ?? 0)
+        }
+
         return next?.engineWillStart(engine, isPlayoutEnabled: isPlayoutEnabled, isRecordingEnabled: isRecordingEnabled) ?? 0
     }
 
@@ -270,6 +292,10 @@ public final class MixerEngineObserver: AudioEngineObserver, Loggable {
         micNode.stop()
         appNode.stop()
 
+        _state.mutate {
+            $0.manualMicrophoneQueue.reset(sampleRate: $0.playerNodeFormat?.sampleRate ?? 0)
+        }
+
         return nextResult ?? 0
     }
 }
@@ -280,12 +306,12 @@ extension MixerEngineObserver {
         _state.mutate {
             guard let playerNodeFormat = $0.playerNodeFormat else { return nil }
 
-            if let converter = $0.converters[format] {
+            if let converter = $0.appAudioConverters[format] {
                 return converter
             }
 
             let newConverter = AudioConverter(from: format, to: playerNodeFormat)
-            $0.converters[format] = newConverter
+            $0.appAudioConverters[format] = newConverter
             return newConverter
         }
     }

@@ -47,7 +47,7 @@ import LiveKitTestSupport
 
         try AudioManager.shared.startLocalRecording(audioProcessingOptions: .noProcessing)
 
-        let silence = try makeConstantBuffer(sampleRate: 16000, channels: 1, value: 0)
+        let silence = try makeManualMicrophoneConstantBuffer(sampleRate: 16000, channels: 1, value: 0)
         for _ in 0 ..< 120 {
             AudioManager.shared.mixer.capture(appAudio: silence)
         }
@@ -131,6 +131,8 @@ import LiveKitTestSupport
         combinedRenderer: PCMObservationRenderer,
         trackRenderer: PCMObservationRenderer,
     ) async throws {
+        AudioManager.shared.mixer.appVolume = 0
+        defer { AudioManager.shared.mixer.appVolume = 1 }
         try await feedUntil(signal) { trackRenderer.snapshot.maximumMagnitude > 0.05 }
         try await waitUntil { combinedRenderer.snapshot.count >= 5 }
 
@@ -163,7 +165,7 @@ import LiveKitTestSupport
     ) async throws {
         let mutedPublication = try #require(try await publisher.localParticipant.setMicrophone(enabled: false))
         #expect(mutedPublication.sid == publication.sid)
-        #expect(AudioManager.shared.mixer.appAudioNode.engine?.isRunning == true)
+        #expect(AudioManager.shared.mixer.micAudioNode.engine?.isRunning == true)
 
         let publisherIdentity = try #require(publisher.localParticipant.identity)
         let remotePublication = try #require(subscriber.remoteParticipants[publisherIdentity]?.firstAudioPublication)
@@ -227,29 +229,10 @@ import LiveKitTestSupport
         return buffer
     }
 
-    private func makeConstantBuffer(sampleRate: Double, channels: AVAudioChannelCount, value: Float) throws -> AVAudioPCMBuffer {
-        let frameCount = AVAudioFrameCount(sampleRate / 100)
-        let format = try #require(AVAudioFormat(
-            commonFormat: .pcmFormatFloat32,
-            sampleRate: sampleRate,
-            channels: channels,
-            interleaved: false,
-        ))
-        let buffer = try #require(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frameCount))
-        buffer.frameLength = frameCount
-        let channelData = try #require(buffer.floatChannelData)
-
-        for channel in 0 ..< Int(channels) {
-            for frame in 0 ..< Int(frameCount) {
-                channelData[channel][frame] = value
-            }
-        }
-        return buffer
-    }
-
     private func feed(_ buffer: AVAudioPCMBuffer, count: Int) async throws {
         for _ in 0 ..< count {
-            AudioManager.shared.mixer.capture(appAudio: buffer)
+            let result = AudioManager.shared.mixer.capture(microphoneAudio: buffer)
+            #expect(result == .accepted || result == .acceptedWithBackpressure)
             try await Task.sleep(nanoseconds: 10_000_000)
         }
     }
@@ -260,7 +243,8 @@ import LiveKitTestSupport
     ) async throws {
         let deadline = Date().addingTimeInterval(5)
         while Date() < deadline, !condition() {
-            AudioManager.shared.mixer.capture(appAudio: buffer)
+            let result = AudioManager.shared.mixer.capture(microphoneAudio: buffer)
+            #expect(result == .accepted || result == .acceptedWithBackpressure)
             try await Task.sleep(nanoseconds: 10_000_000)
         }
         #expect(condition())
@@ -336,52 +320,5 @@ private final class ManualGraphProbe: AudioEngineObserver, @unchecked Sendable {
             $0.callbackRanOnMainThread = $0.callbackRanOnMainThread || Thread.isMainThread
         }
         return 0
-    }
-}
-
-private final class PCMObservationRenderer: AudioRenderer, @unchecked Sendable {
-    struct Snapshot {
-        var count = 0
-        var sampleRates: [Double] = []
-        var channelCounts: [AVAudioChannelCount] = []
-        var commonFormats: [AVAudioCommonFormat] = []
-        var frameDurations: [TimeInterval] = []
-        var maximumMagnitude: Float = 0
-        var callbackRanOnMainThread = false
-    }
-
-    var snapshot: Snapshot { state.copy() }
-
-    private let state = StateSync(Snapshot())
-
-    func reset() {
-        state.mutate { $0 = Snapshot() }
-    }
-
-    func render(pcmBuffer: AVAudioPCMBuffer) {
-        var magnitude: Float = 0
-        if let channels = pcmBuffer.floatChannelData {
-            for channel in 0 ..< Int(pcmBuffer.format.channelCount) {
-                for frame in 0 ..< Int(pcmBuffer.frameLength) {
-                    magnitude = max(magnitude, abs(channels[channel][frame]))
-                }
-            }
-        } else if let channels = pcmBuffer.int16ChannelData {
-            for channel in 0 ..< Int(pcmBuffer.format.channelCount) {
-                for frame in 0 ..< Int(pcmBuffer.frameLength) {
-                    magnitude = max(magnitude, abs(Float(channels[channel][frame])) / Float(Int16.max))
-                }
-            }
-        }
-
-        state.mutate {
-            $0.count += 1
-            $0.sampleRates.append(pcmBuffer.format.sampleRate)
-            $0.channelCounts.append(pcmBuffer.format.channelCount)
-            $0.commonFormats.append(pcmBuffer.format.commonFormat)
-            $0.frameDurations.append(Double(pcmBuffer.frameLength) / pcmBuffer.format.sampleRate)
-            $0.maximumMagnitude = max($0.maximumMagnitude, magnitude)
-            $0.callbackRanOnMainThread = $0.callbackRanOnMainThread || Thread.isMainThread
-        }
     }
 }

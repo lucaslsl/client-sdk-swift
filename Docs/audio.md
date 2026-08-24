@@ -210,9 +210,9 @@ If you disable automatic audio session configuration (`AudioManager.shared.audio
 
 ## Capturing Audio Buffers
 
-The SDK supports capturing custom audio buffers (`AVAudioPCMBuffer`) instead of or in addition to microphone input.
+The SDK supports separate caller-provided microphone and app/screen-share audio lanes.
 
-### Capturing Audio Buffers with Microphone
+### Capturing App or Screen-Share Audio with Microphone
 
 To capture custom audio buffers while still using the microphone:
 
@@ -226,7 +226,7 @@ To capture custom audio buffers while still using the microphone:
    AudioManager.shared.mixer.capture(appAudio: yourAudioBuffer)
    ```
 
-### Capturing Audio Buffers Without Device Access (Manual Mode)
+### Capturing Microphone Audio Without Device Access (Manual Mode)
 
 For applications that need to provide audio without accessing the device's microphone:
 
@@ -240,20 +240,53 @@ For applications that need to provide audio without accessing the device's micro
    try await room.localParticipant.setMicrophone(enabled: true)
    ```
 
-3. Provide audio buffers continuously:
+3. Provide microphone buffers continuously and honor the result:
    ```swift
-   AudioManager.shared.mixer.capture(appAudio: yourAudioBuffer)
+   let result = AudioManager.shared.mixer.capture(microphoneAudio: yourAudioBuffer)
+
+   switch result {
+   case .accepted:
+       break
+   case .acceptedWithBackpressure:
+       // The buffer was accepted. Slow the producer until the queue returns to target.
+       break
+   case .notReady:
+       // Wait for the manual microphone graph to start.
+       break
+   case .droppedQueueFull:
+       // This stale buffer was dropped. Do not retry it and add more latency.
+       break
+   case .rejectedFormat:
+       // Supply nonempty PCM in a format AVAudioConverter supports.
+       break
+   }
    ```
 
 > **NOTE**: When manual rendering mode is enabled, the audio engine doesn't access any audio devices. This means remote audio will not be played automatically and you must handle audio playback yourself.
 
-> **NOTE**: Audio format will be automatically converted so you don't need to handle this yourself.
+> **NOTE**: Microphone audio is converted synchronously to the engine format on the caller's thread. Do not call this API from a real-time audio callback. Use your own real-time-safe ingress ring and feed the SDK from a processing worker.
+
+The microphone lane targets 50 ms of queued audio and has a hard 100 ms ceiling.
+`acceptedWithBackpressure` accepts the current buffer but asks the producer to slow
+down. `droppedQueueFull` does not accept the current buffer. Queue depth,
+high-water mark, accepted buffers, backpressured buffers, drops, not-ready calls,
+and rejected formats are available from
+`AudioManager.shared.mixer.manualMicrophoneCaptureMetrics`. Metrics and queued
+audio reset whenever the graph stops or starts; callbacks from an older graph
+cannot consume buffers from the new graph.
+
+The manual microphone API is Swift-only because `MixerEngineObserver` and the
+existing manual-rendering surface are Swift-only. Its public result and metrics
+are `Sendable` values for safe observation across consumer tasks.
 
 ### Volume Control
 
 You can adjust the volume levels for different audio sources:
 
 - **Microphone volume**: `AudioManager.shared.mixer.micVolume`
-- **Custom audio buffer volume**: `AudioManager.shared.mixer.appVolume`
+- **App/screen-share audio volume**: `AudioManager.shared.mixer.appVolume`
 
 Both properties accept values from `0.0` (muted) to `1.0` (full volume).
+
+`appVolume` does not affect buffers submitted with `capture(microphoneAudio:)`;
+those use the microphone lane and `micVolume`.
