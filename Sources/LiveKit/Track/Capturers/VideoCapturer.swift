@@ -183,7 +183,13 @@ public class VideoCapturer: NSObject, @unchecked Sendable, Loggable, VideoCaptur
             $0.capturer?(self, didUpdate: .stopped)
         }
 
-        dimensionsCompleter.reset()
+        // Reset both on the frame queue so an unchanged next frame resolves republishing.
+        await withCheckedContinuation { continuation in
+            processingQueue.async {
+                self.set(dimensions: nil)
+                continuation.resume()
+            }
+        }
 
         return true
     }

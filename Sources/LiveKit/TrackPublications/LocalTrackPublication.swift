@@ -42,6 +42,39 @@ public class LocalTrackPublication: TrackPublication, @unchecked Sendable {
 
     private let _debounce = Debounce(delay: 0.1)
 
+    /// Updates the bitrate and frame-rate limits of a published, single-layer camera.
+    /// The limits are retained for capture-size changes and full reconnect republishes.
+    ///
+    /// - Note: Simulcast and SVC publications require a fixed layer configuration and are rejected.
+    /// - Example: `try publication.setCameraEncoding(VideoEncoding(maxBitrate: 500_000, maxFps: 30))`
+    public func setCameraEncoding(_ encoding: VideoEncoding) throws {
+        guard encoding.maxBitrate > 0, encoding.maxFps > 0 else {
+            throw LiveKitError(.invalidParameter, message: "Encoding limits must be positive")
+        }
+        guard let track = track as? LocalVideoTrack, track.source == .camera else {
+            throw LiveKitError(.invalidState, message: "A published camera track is required")
+        }
+        let defaultOptions = participant?._room?._state.roomOptions.defaultVideoPublishOptions
+        try track._state.mutate { state in
+            guard state.rtpSender != nil,
+                  let options = (state.lastPublishOptions as? VideoPublishOptions) ?? defaultOptions,
+                  !options.simulcast, options.preferredCodec?.isSVC != true,
+                  state.videoCodec?.isSVC != true
+            else {
+                throw LiveKitError(.invalidState, message: "A single-layer camera publication is required")
+            }
+            state.lastPublishOptions = VideoPublishOptions(
+                name: options.name, encoding: encoding,
+                screenShareEncoding: options.screenShareEncoding,
+                simulcast: options.simulcast, simulcastLayers: options.simulcastLayers,
+                screenShareSimulcastLayers: options.screenShareSimulcastLayers,
+                preferredCodec: options.preferredCodec, preferredBackupCodec: options.preferredBackupCodec,
+                degradationPreference: options.degradationPreference, streamName: options.streamName,
+            )
+        }
+        capturer(track.capturer, didUpdate: track.capturer.dimensions)
+    }
+
     public func mute() async throws {
         guard let track = track as? LocalTrack else {
             throw LiveKitError(.invalidState, message: "track is nil or not a LocalTrack")
