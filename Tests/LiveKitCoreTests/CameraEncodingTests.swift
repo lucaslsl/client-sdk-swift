@@ -62,14 +62,13 @@ struct CameraEncodingTests {
             }
             try await eventually { track._state.rtpSender?.parameters.encodings.first?.maxBitrateBps?.intValue == 500_000 }
             let republished = try #require(rooms[0].localParticipant.videoTracks.first as? LocalTrackPublication)
+            try republished.setCameraEncoding(.init(maxBitrate: 1_000_000, maxFps: 30))
+            dimensions.mutate { $0 = .h720_169 }
+            try await eventually { track._state.rtpSender?.parameters.encodings.first?.maxBitrateBps?.intValue == 1_000_000 }
             try await eventually { rooms[1].remoteParticipants[identity]?.videoTracks.first?.track != nil }
             let nextReceived = try #require(rooms[1].remoteParticipants[identity]?.videoTracks.first?.track as? RemoteVideoTrack)
             let nextRenderer = CameraFrameObserver()
             nextReceived.add(videoRenderer: nextRenderer)
-            try await eventually { nextRenderer.size == .h360_169 }
-            try republished.setCameraEncoding(.init(maxBitrate: 1_000_000, maxFps: 30))
-            dimensions.mutate { $0 = .h720_169 }
-            try await eventually { track._state.rtpSender?.parameters.encodings.first?.maxBitrateBps?.intValue == 1_000_000 }
             try await eventually { nextRenderer.size == .h720_169 }
             #expect(track._state.rtpSender?.parameters.encodings.count == 1)
         }

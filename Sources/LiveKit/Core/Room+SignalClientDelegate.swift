@@ -349,6 +349,13 @@ extension Room: SignalClientDelegate {
         do {
             let publisher = try requirePublisher()
             try await publisher.set(remoteDescription: answer, offerId: offerId)
+            // SDP can overwrite encoding limits changed while the offer was in flight.
+            for publication in localParticipant.videoTracks.compactMap({ $0 as? LocalTrackPublication }) where publication.source == .camera {
+                guard let track = publication.track as? LocalVideoTrack,
+                      let options = track.publishOptions as? VideoPublishOptions,
+                      !options.simulcast else { continue }
+                publication.recomputeSenderParameters()
+            }
         } catch {
             log("Failed to set remote description with offerId: \(offerId), error: \(error)", .error)
         }
