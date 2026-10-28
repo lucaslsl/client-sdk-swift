@@ -297,6 +297,7 @@ public class Track: NSObject, @unchecked Sendable, Loggable {
     // Returns true if state updated
     @discardableResult
     func onUnpublish() async throws -> Bool {
+        (self as? LocalAudioTrack)?.endHold()
         // For LocalTrack only...
         guard self is LocalTrack else { return false }
         guard _state.publishState != .unpublished else { return false }
@@ -336,6 +337,12 @@ extension Track {
     // @objc can only be used with members of classes, @objc protocols, and concrete extensions of classes
     //
     func _mute() async throws {
+        // A held track is already signalled muted; disable before lifting the silence.
+        if let audioTrack = self as? LocalAudioTrack, audioTrack.isHeld {
+            try await disable()
+            audioTrack.endHold()
+            return
+        }
         // LocalTrack only, already muted
         guard self is LocalTrack, !isMuted else { return }
         try await disable() // Disable track first
@@ -354,6 +361,7 @@ extension Track {
             try await start()
         }
         try await enable() // Enable track
+        (self as? LocalAudioTrack)?.endHold()
         set(muted: false, shouldSendSignal: true)
     }
 }

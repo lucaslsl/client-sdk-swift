@@ -69,6 +69,55 @@ import Testing
         #expect(!AudioManager.shared.isCaptureSilenced)
     }
 
+    // LocalTrackPublication.mute() and unmute() call these directly, so a
+    // hold must end through them as well as through the track's own methods.
+    @Test func mutingThroughThePublicationPathEndsAHold() async throws {
+        let track = LocalAudioTrack.createTrack()
+        defer { AudioManager.shared.isCaptureSilenced = false }
+        try await track.hold()
+
+        try await track._mute()
+
+        #expect(!track.isHeld)
+        #expect(!track.mediaTrack.isEnabled)
+        #expect(!AudioManager.shared.isCaptureSilenced)
+    }
+
+    @Test func unmutingThroughThePublicationPathEndsAHold() async throws {
+        let track = LocalAudioTrack.createTrack()
+        defer { AudioManager.shared.isCaptureSilenced = false }
+        try await track.hold()
+
+        try await track._unmute()
+
+        #expect(!track.isHeld)
+        #expect(!track.isMuted)
+        #expect(!AudioManager.shared.isCaptureSilenced)
+    }
+
+    @Test func unpublishingAHeldTrackLiftsTheSilence() async throws {
+        let track = LocalAudioTrack.createTrack()
+        defer { AudioManager.shared.isCaptureSilenced = false }
+        try await track.hold()
+        try await track.onPublish()
+
+        try await track.onUnpublish()
+
+        #expect(!track.isHeld)
+        #expect(!AudioManager.shared.isCaptureSilenced)
+    }
+
+    @Test func endingATrackThatIsNotHeldLeavesAnotherTracksHold() async throws {
+        let held = LocalAudioTrack.createTrack()
+        defer { AudioManager.shared.isCaptureSilenced = false }
+        try await held.hold()
+
+        try await LocalAudioTrack.createTrack().mute()
+
+        #expect(held.isHeld)
+        #expect(AudioManager.shared.isCaptureSilenced)
+    }
+
     @Test func aSilencedCaptureReachesRenderersButLeavesOnlySilence() async throws {
         // WebRTC hands the adapter its buffers; a subclass stands in for one.
         let adapter = AudioCustomProcessingDelegateAdapter(label: "test", rtcDelegateSetter: { _ in })

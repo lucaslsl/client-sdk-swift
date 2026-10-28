@@ -94,7 +94,9 @@ public class LocalAudioTrack: Track, LocalTrackProtocol, AudioTrackProtocol, @un
     /// Signals the track muted but keeps it enabled, so capture and voice
     /// processing keep running: local audio renderers go on hearing the
     /// echo-cancelled microphone while only silence is encoded. Works from
-    /// muted or unmuted; ``mute()`` or ``unmute()`` ends it.
+    /// muted or unmuted, before or after publishing. ``mute()`` or
+    /// ``unmute()``, on the track or its publication, ends it, and so does
+    /// unpublishing: a full reconnect does not republish a held track.
     public func hold() async throws {
         // Silence first: enabling, or staying enabled, must never encode speech.
         AudioManager.shared.isCaptureSilenced = true
@@ -104,19 +106,17 @@ public class LocalAudioTrack: Track, LocalTrackProtocol, AudioTrackProtocol, @un
     }
 
     public func mute() async throws {
-        guard isHeld else { return try await super._mute() }
-        // Muted is already signalled; disable before lifting the silence.
-        try await disable()
-        endHold()
+        try await super._mute()
     }
 
     public func unmute() async throws {
-        guard isHeld else { return try await super._unmute() }
-        endHold()
-        set(muted: false, shouldSendSignal: true)
+        try await super._unmute()
     }
 
-    private func endHold() {
+    /// The silence is shared by every capture, so it is lifted only by the
+    /// track that holds it.
+    func endHold() {
+        guard isHeld else { return }
         _isHeld.mutate { $0 = false }
         AudioManager.shared.isCaptureSilenced = false
     }
