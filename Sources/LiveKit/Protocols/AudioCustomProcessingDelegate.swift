@@ -54,9 +54,20 @@ class AudioCustomProcessingDelegateAdapter: MulticastDelegate<AudioRenderer>, @u
     private struct State {
         var target: AudioCustomProcessingDelegate?
         var isAttached: Bool = false
+        var isSilenced: Bool = false
     }
 
     private var _state = StateSync(State())
+
+    /// While true, each buffer is zeroed after the renderers have taken their
+    /// copy, so they still hear the processed capture and WebRTC encodes silence.
+    var isSilenced: Bool {
+        get { _state.isSilenced }
+        set {
+            _state.mutate { $0.isSilenced = newValue }
+            updateRTCAttachment()
+        }
+    }
 
     private let rtcDelegateSetter: (LKRTCAudioCustomProcessingDelegate?) -> Void
 
@@ -92,7 +103,7 @@ class AudioCustomProcessingDelegateAdapter: MulticastDelegate<AudioRenderer>, @u
 
     private func updateRTCAttachment() {
         let result = _state.mutate { state -> (didChange: Bool, delegate: LKRTCAudioCustomProcessingDelegate?) in
-            let shouldAttach = state.target != nil || isDelegatesNotEmpty
+            let shouldAttach = state.target != nil || isDelegatesNotEmpty || state.isSilenced
             guard shouldAttach != state.isAttached else { return (false, nil) }
             state.isAttached = shouldAttach
             return (true, shouldAttach ? self : nil)
@@ -111,12 +122,20 @@ class AudioCustomProcessingDelegateAdapter: MulticastDelegate<AudioRenderer>, @u
     }
 
     func audioProcessingProcess(audioBuffer: LKRTCAudioBuffer) {
+        let (target, isSilenced) = _state.read { ($0.target, $0.isSilenced) }
         let lkAudioBuffer = LKAudioBuffer(audioBuffer: audioBuffer)
         target?.audioProcessingProcess(audioBuffer: lkAudioBuffer)
 
         // Convert to pcmBuffer and notify only if an audioRenderer is added.
+        // The conversion copies, so the zeroing below never reaches a renderer.
         if isDelegatesNotEmpty, let pcmBuffer = lkAudioBuffer.toAVAudioPCMBuffer() {
             notify { $0.render(pcmBuffer: pcmBuffer) }
+        }
+
+        if isSilenced {
+            for channel in 0 ..< lkAudioBuffer.channels {
+                lkAudioBuffer.rawBuffer(forChannel: channel).update(repeating: 0, count: lkAudioBuffer.frames)
+            }
         }
     }
 

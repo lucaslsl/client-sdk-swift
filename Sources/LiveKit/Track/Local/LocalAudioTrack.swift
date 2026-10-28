@@ -86,12 +86,39 @@ public class LocalAudioTrack: Track, LocalTrackProtocol, AudioTrackProtocol, @un
                                captureOptions: options)
     }
 
+    private let _isHeld = StateSync(false)
+
+    /// Whether ``hold()`` is in effect.
+    public var isHeld: Bool { _isHeld.copy() }
+
+    /// Signals the track muted but keeps it enabled, so capture and voice
+    /// processing keep running: local audio renderers go on hearing the
+    /// echo-cancelled microphone while only silence is encoded. Works from
+    /// muted or unmuted; ``mute()`` or ``unmute()`` ends it.
+    public func hold() async throws {
+        // Silence first: enabling, or staying enabled, must never encode speech.
+        AudioManager.shared.isCaptureSilenced = true
+        _isHeld.mutate { $0 = true }
+        try await enable()
+        set(muted: true, shouldSendSignal: true)
+    }
+
     public func mute() async throws {
-        try await super._mute()
+        guard isHeld else { return try await super._mute() }
+        // Muted is already signalled; disable before lifting the silence.
+        try await disable()
+        endHold()
     }
 
     public func unmute() async throws {
-        try await super._unmute()
+        guard isHeld else { return try await super._unmute() }
+        endHold()
+        set(muted: false, shouldSendSignal: true)
+    }
+
+    private func endHold() {
+        _isHeld.mutate { $0 = false }
+        AudioManager.shared.isCaptureSilenced = false
     }
 
     /// Updates this local track's voice processing options without restarting capture.

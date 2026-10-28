@@ -208,6 +208,24 @@ Notes:
 
 If you disable automatic audio session configuration (`AudioManager.shared.audioSession.isAutomaticConfigurationEnabled = false`), the SDK will not touch the session category. Make sure your app sets `.playAndRecord` before unmuting or publishing the mic.
 
+### Holding the microphone
+
+A muted track is disabled, and a disabled track stops voice processing, so
+`AudioManager.shared.add(localAudioRenderer:)` renderers receive nothing while
+it is muted. To keep hearing the echo-cancelled microphone locally while
+others see you muted, hold the track instead:
+
+```swift
+try await localAudioTrack.hold()   // signalled muted, still capturing
+try await localAudioTrack.unmute() // ends the hold, sends the mic again
+try await localAudioTrack.mute()   // ends the hold as a plain mute
+```
+
+While held, every captured buffer is zeroed after the local renderers have
+taken their copy, so only silence is encoded. A full reconnect does not
+republish a held track, since it counts as muted; hold it again once it is
+republished.
+
 ## Capturing Audio Buffers
 
 The SDK supports separate caller-provided microphone and app/screen-share audio lanes.

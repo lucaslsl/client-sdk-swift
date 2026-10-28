@@ -200,6 +200,13 @@ public class AudioManager: Loggable {
         rtcDelegateSetter: { RTC.audioProcessingModule.renderPreProcessingDelegate = $0 },
     )
 
+    /// Zeroes captured audio after ``add(localAudioRenderer:)`` renderers have
+    /// read it, so only silence is encoded. Set by ``LocalAudioTrack/hold()``.
+    var isCaptureSilenced: Bool {
+        get { capturePostProcessingDelegateAdapter.isSilenced }
+        set { capturePostProcessingDelegateAdapter.isSilenced = newValue }
+    }
+
     let capturePostProcessingDelegateSubject = CurrentValueSubject<AudioCustomProcessingDelegate?, Never>(nil)
 
     /// Add a delegate to modify the local audio buffer before it is sent to the network
