@@ -207,7 +207,8 @@ extension LocalTrackPublication {
             }
         }
 
-        // A value set while these parameters were being recomputed must not be written back over
+        // WebRTC drops a write whose parameters were read before the sender's latest read, so a degradation
+        // preference written while these were being recomputed may have been dropped: write the stored one here
         if let degradationPreference = track.senderDegradationPreference(publishOptions: nil) {
             parameters.degradationPreference = NSNumber(value: degradationPreference.rawValue)
         }
