@@ -154,20 +154,85 @@ struct LiveDegradationPreferenceTests {
         #expect(backupSender.degradationPreference == .balanced)
     }
 
+    @Test func aResizeKeepsTheValueSetLast() async throws {
+        let (transport, delegate) = try makePublisher()
+        defer { Task { await transport.close() } }
+        _ = delegate
+
+        let room = Room()
+        let publishOptions = VideoPublishOptions(simulcast: false, degradationPreference: .maintainResolution)
+        let track = LocalVideoTrack.createBufferTrack()
+        track.capturer.set(dimensions: Dimensions(width: 640, height: 360))
+        let sender = try await publish(track, on: transport, publishOptions: publishOptions)
+        let publication = await addPublication(of: track, to: room)
+
+        track.set(degradationPreference: .maintainFramerate)
+        waitForSenderWrites()
+
+        // The capturer's resize reaches this through a debounced task; calling it directly avoids waiting on it.
+        let resized = Dimensions(width: 1920, height: 1080)
+        track.capturer.set(dimensions: resized)
+        publication.recomputeSenderParameters()
+
+        let resizedBitrate = Utils.computeVideoEncodings(dimensions: resized, publishOptions: publishOptions, isScreenShare: true).first?.maxBitrateBps
+        #expect(sender.parameters.encodings.first?.maxBitrateBps == resizedBitrate)
+        #expect(sender.degradationPreference == .maintainFramerate)
+    }
+
+    @Test func aLayerChangeKeepsTheValueSetLast() async throws {
+        let (transport, delegate) = try makePublisher()
+        defer { Task { await transport.close() } }
+        _ = delegate
+
+        let room = Room()
+        let track = LocalVideoTrack.createBufferTrack()
+        let sender = try await publish(track, on: transport, publishOptions: VideoPublishOptions(simulcast: false, degradationPreference: .maintainResolution))
+        let publication = await addPublication(of: track, to: room)
+
+        track.set(degradationPreference: .maintainFramerate)
+        waitForSenderWrites()
+
+        // What the room does when the server sends a subscribed-quality update; that message needs a server.
+        room.localParticipant._set(subscribedQualities: [Livekit_SubscribedQuality.with {
+            $0.quality = .high
+            $0.enabled = false
+        }], forTrackSid: publication.sid)
+
+        #expect(sender.parameters.encodings.first?.isActive == false)
+        #expect(sender.degradationPreference == .maintainFramerate)
+    }
+
     // MARK: - Helpers
 
     /// What `LocalParticipant` does with each new sender of a video track: attach it to the track,
-    /// then apply the track's preference. Both steps are internal; the public path needs a server.
+    /// apply the track's preference, and keep the publish options. All internal; the public path needs a server.
     private func publish(_ track: LocalVideoTrack,
                          on transport: Transport,
                          publishOptions: VideoPublishOptions) async throws -> LKRTCRtpSender
     {
         let transInit = DispatchQueue.liveKitWebRTC.sync { LKRTCRtpTransceiverInit() }
         transInit.direction = .sendOnly
+        if let dimensions = track.capturer.dimensions {
+            transInit.sendEncodings = Utils.computeVideoEncodings(dimensions: dimensions,
+                                                                  publishOptions: publishOptions,
+                                                                  isScreenShare: track.source == .screenShareVideo)
+        }
         let transceiver = try await transport.addTransceiver(with: track.mediaTrack, transceiverInit: transInit)
         await track.set(transport: transport, rtpSender: transceiver.sender)
         track.applyDegradationPreference(to: transceiver.sender, publishOptions: publishOptions)
+        track._state.mutate { $0.lastPublishOptions = publishOptions }
         return transceiver.sender
+    }
+
+    /// What `LocalParticipant` does once the server has answered a publish; that answer needs a server.
+    private func addPublication(of track: LocalVideoTrack, to room: Room) async -> LocalTrackPublication {
+        let publication = LocalTrackPublication(info: Livekit_TrackInfo.with {
+            $0.sid = "TR_degradationPreference"
+            $0.type = .video
+        }, participant: room.localParticipant)
+        await publication.set(track: track)
+        room.localParticipant.add(publication: publication)
+        return publication
     }
 
     /// The setter returns before WebRTC has the value; this waits for the writes it queued.
