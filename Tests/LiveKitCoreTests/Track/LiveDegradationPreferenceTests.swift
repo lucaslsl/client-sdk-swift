@@ -100,6 +100,23 @@ struct LiveDegradationPreferenceTests {
         #expect(sender.degradationPreference == .maintainFramerate)
     }
 
+    @Test func aPreferenceSetAfterUnpublishAppliesAtTheNextPublish() async throws {
+        let (transport, delegate) = try makePublisher()
+        defer { Task { await transport.close() } }
+        _ = delegate
+
+        let publishOptions = VideoPublishOptions(degradationPreference: .maintainResolution)
+        let track = LocalVideoTrack.createBufferTrack()
+        let removedSender = try await publish(track, on: transport, publishOptions: publishOptions)
+        try await transport.remove(track: removedSender)
+
+        track.set(degradationPreference: .maintainFramerate)
+        waitForSenderWrites()
+
+        let newSender = try await publish(track, on: transport, publishOptions: publishOptions)
+        #expect(newSender.degradationPreference == .maintainFramerate)
+    }
+
     @Test(arguments: [
         (DegradationPreference.auto, LKRTCDegradationPreference.maintainResolution),
         (.maintainFramerate, .maintainFramerate),
