@@ -88,9 +88,12 @@ public extension LocalVideoTrack {
 public extension LocalVideoTrack {
     /// Sets how WebRTC degrades this track's video when bandwidth or CPU runs short, while it is published.
     ///
-    /// The value applies at once to the track's senders and to every sender the track gets later,
+    /// The value goes to the track's senders and to every sender the track gets later,
     /// including the one created when the track is republished after a full reconnect. From the first call on,
     /// it takes the place of ``VideoPublishOptions/degradationPreference``.
+    ///
+    /// Safe to call from any thread, the main thread included: it returns without waiting for WebRTC, and the
+    /// senders get the value set last.
     ///
     /// ```swift
     /// track.set(degradationPreference: .maintainFramerate)
@@ -101,20 +104,21 @@ public extension LocalVideoTrack {
     /// - Note: Calling this before the track is published, or after it is unpublished, stores the value for the
     ///   next publish.
     func set(degradationPreference: DegradationPreference) {
-        let senders = _state.mutate {
-            $0.degradationPreference = degradationPreference
-            return [$0.rtpSender].compactMap(\.self) + $0.rtpSenderForCodec.values
-        }
+        _state.mutate { $0.degradationPreference = degradationPreference }
 
-        let preference = degradationPreference.toRTCType() ?? .maintainResolution
-        log("Setting degradationPreference to \(preference) on \(senders.count) sender(s)")
-        for sender in senders {
-            sender.set(degradationPreference: preference)
+        Self.degradationPreferenceQueue.async {
+            let senders = self._state.read { [$0.rtpSender].compactMap(\.self) + $0.rtpSenderForCodec.values }
+            self.writeDegradationPreference(to: senders, publishOptions: nil)
         }
     }
 }
 
 extension LocalVideoTrack {
+    /// Writing sender parameters blocks on WebRTC's signalling thread, so the setter's writes run here instead of
+    /// on its caller. The setter's writes and those to each new sender go through this queue and read the stored
+    /// value when they run, so an older value can't land after a newer one.
+    static let degradationPreferenceQueue = DispatchQueue(label: "LiveKitSDK.degradationPreference")
+
     /// The preference a sender of this track uses: the value set last with ``set(degradationPreference:)``,
     /// else `publishOptions`' value, or `nil` to leave the sender's own.
     func senderDegradationPreference(publishOptions: VideoPublishOptions?) -> LKRTCDegradationPreference? {
@@ -123,10 +127,19 @@ extension LocalVideoTrack {
     }
 
     /// Call on every new sender of this track, after attaching it, so a value set meanwhile reaches it either way.
+    /// Blocks until the sender has it.
     func applyDegradationPreference(to sender: LKRTCRtpSender, publishOptions: VideoPublishOptions?) {
+        Self.degradationPreferenceQueue.sync {
+            writeDegradationPreference(to: [sender], publishOptions: publishOptions)
+        }
+    }
+
+    private func writeDegradationPreference(to senders: [LKRTCRtpSender], publishOptions: VideoPublishOptions?) {
         guard let preference = senderDegradationPreference(publishOptions: publishOptions) else { return }
-        log("Setting degradationPreference to \(preference)")
-        sender.set(degradationPreference: preference)
+        log("Setting degradationPreference to \(preference) on \(senders.count) sender(s)")
+        for sender in senders {
+            sender.set(degradationPreference: preference)
+        }
     }
 }
 

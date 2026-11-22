@@ -21,7 +21,7 @@ import LiveKitTestSupport
 #endif
 @preconcurrency import LiveKitWebRTC
 
-/// A live degradation preference reaches the track's sender at once, and every later sender the
+/// A live degradation preference reaches the track's sender, and every later sender the
 /// track gets, while a track that never had one keeps the preference its publish options give.
 ///
 /// Publishing and republishing need a server, so these tests stand in for the publish path with
@@ -29,7 +29,7 @@ import LiveKitTestSupport
 /// preference to it. Senders come from a real, offline publisher `Transport`.
 @Suite(.serialized, .tags(.media))
 struct LiveDegradationPreferenceTests {
-    @Test func settingThePreferenceChangesThePublishedSenderAtOnce() async throws {
+    @Test func settingThePreferenceChangesThePublishedSender() async throws {
         let (transport, delegate) = try makePublisher()
         defer { Task { await transport.close() } }
         _ = delegate
@@ -39,10 +39,33 @@ struct LiveDegradationPreferenceTests {
         #expect(sender.degradationPreference == .maintainResolution)
 
         track.set(degradationPreference: .maintainFramerate)
+        waitForSenderWrites()
         #expect(sender.degradationPreference == .maintainFramerate)
 
         track.set(degradationPreference: .maintainResolution)
+        waitForSenderWrites()
         #expect(sender.degradationPreference == .maintainResolution)
+    }
+
+    @Test func settingThePreferenceReturnsWithoutWaitingForWebRTC() async throws {
+        let (transport, delegate) = try makePublisher()
+        defer { Task { await transport.close() } }
+        _ = delegate
+
+        let track = LocalVideoTrack.createBufferTrack()
+        let sender = try await publish(track, on: transport, publishOptions: VideoPublishOptions(degradationPreference: .maintainResolution))
+
+        // Holding the queue the setter hands its sender writes to shows the call returns before the write.
+        let gate = DispatchSemaphore(value: 0)
+        defer { gate.signal() }
+        LocalVideoTrack.degradationPreferenceQueue.async { gate.wait() }
+
+        track.set(degradationPreference: .maintainFramerate)
+        #expect(sender.degradationPreference == .maintainResolution)
+
+        gate.signal()
+        waitForSenderWrites()
+        #expect(sender.degradationPreference == .maintainFramerate)
     }
 
     @Test func aRepublishedTrackGetsTheValueSetLastOnItsNewSender() async throws {
@@ -104,6 +127,7 @@ struct LiveDegradationPreferenceTests {
         let sender = try await publish(track, on: transport, publishOptions: VideoPublishOptions(degradationPreference: .maintainFramerate))
 
         track.set(degradationPreference: .auto)
+        waitForSenderWrites()
 
         #expect(sender.degradationPreference == .maintainResolution)
     }
@@ -126,6 +150,7 @@ struct LiveDegradationPreferenceTests {
         #expect(backupSender.degradationPreference == .maintainFramerate)
 
         track.set(degradationPreference: .balanced)
+        waitForSenderWrites()
         #expect(backupSender.degradationPreference == .balanced)
     }
 
@@ -143,6 +168,11 @@ struct LiveDegradationPreferenceTests {
         await track.set(transport: transport, rtpSender: transceiver.sender)
         track.applyDegradationPreference(to: transceiver.sender, publishOptions: publishOptions)
         return transceiver.sender
+    }
+
+    /// The setter returns before WebRTC has the value; this waits for the writes it queued.
+    private func waitForSenderWrites() {
+        LocalVideoTrack.degradationPreferenceQueue.sync {}
     }
 
     /// `MulticastDelegate` holds the delegate weakly, so the caller keeps it alive.
