@@ -86,6 +86,60 @@ public extension LocalVideoTrack {
 }
 
 public extension LocalVideoTrack {
+    /// Sets how WebRTC degrades this track's video when bandwidth or CPU runs short, while it is published.
+    ///
+    /// The value applies at once to the track's senders and to every sender the track gets later,
+    /// including the one created when the track is republished after a full reconnect. From the first call on,
+    /// it takes the place of ``VideoPublishOptions/degradationPreference``.
+    ///
+    /// ```swift
+    /// track.set(degradationPreference: .maintainFramerate)
+    /// ```
+    ///
+    /// - Parameter degradationPreference: The preference to use. ``DegradationPreference/auto`` resolves as it does
+    ///   at publish, to ``DegradationPreference/maintainResolution``.
+    /// - Note: Calling this before the track is published, or after it is unpublished, stores the value for the
+    ///   next publish.
+    func set(degradationPreference: DegradationPreference) {
+        let senders = _state.mutate {
+            $0.degradationPreference = degradationPreference
+            return [$0.rtpSender].compactMap(\.self) + $0.rtpSenderForCodec.values
+        }
+
+        let preference = degradationPreference.toRTCType() ?? .maintainResolution
+        log("Setting degradationPreference to \(preference) on \(senders.count) sender(s)")
+        for sender in senders {
+            sender.set(degradationPreference: preference)
+        }
+    }
+}
+
+extension LocalVideoTrack {
+    /// The preference a sender of this track uses: the value set last with ``set(degradationPreference:)``,
+    /// else `publishOptions`' value, or `nil` to leave the sender's own.
+    func senderDegradationPreference(publishOptions: VideoPublishOptions?) -> LKRTCDegradationPreference? {
+        guard let preference = _state.degradationPreference ?? publishOptions?.degradationPreference else { return nil }
+        return preference.toRTCType() ?? .maintainResolution
+    }
+
+    /// Call on every new sender of this track, after attaching it, so a value set meanwhile reaches it either way.
+    func applyDegradationPreference(to sender: LKRTCRtpSender, publishOptions: VideoPublishOptions?) {
+        guard let preference = senderDegradationPreference(publishOptions: publishOptions) else { return }
+        log("Setting degradationPreference to \(preference)")
+        sender.set(degradationPreference: preference)
+    }
+}
+
+private extension LKRTCRtpSender {
+    func set(degradationPreference: LKRTCDegradationPreference) {
+        // Changing params directly doesn't work so we need to update params and set it back to sender.parameters
+        let params = parameters
+        params.degradationPreference = NSNumber(value: degradationPreference.rawValue)
+        parameters = params
+    }
+}
+
+public extension LocalVideoTrack {
     /// Clone with same ``VideoCapturer``.
     func clone() -> LocalVideoTrack {
         LocalVideoTrack(name: name,

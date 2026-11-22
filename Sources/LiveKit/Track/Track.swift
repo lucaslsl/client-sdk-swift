@@ -109,6 +109,7 @@ public class Track: NSObject, @unchecked Sendable, Loggable {
         // Only for LocalTracks
         var lastPublishOptions: TrackPublishOptions?
         var publishState: PublishState = .unpublished
+        var degradationPreference: DegradationPreference?
 
         weak var transport: Transport?
         var videoCodec: VideoCodec?

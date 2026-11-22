@@ -207,6 +207,11 @@ extension LocalTrackPublication {
             }
         }
 
+        // A value set while these parameters were being recomputed must not be written back over
+        if let degradationPreference = track.senderDegradationPreference(publishOptions: nil) {
+            parameters.degradationPreference = NSNumber(value: degradationPreference.rawValue)
+        }
+
         // set the updated parameters
         sender.parameters = parameters
 

@@ -532,6 +532,7 @@ extension LocalParticipant {
 
         // Attach multi-codec sender...
         track._state.mutate { $0.rtpSenderForCodec[videoCodec] = sender }
+        track.applyDegradationPreference(to: sender, publishOptions: nil)
 
         try await room.publisherShouldNegotiate()
     }
@@ -694,16 +695,10 @@ extension LocalParticipant {
                 // Attach sender to track...
                 await track.set(transport: publisher, rtpSender: transceiver.sender)
 
-                if track is LocalVideoTrack {
+                if let track = track as? LocalVideoTrack {
                     let publishOptions = (options as? VideoPublishOptions) ?? room._state.roomOptions.defaultVideoPublishOptions
 
-                    let degradationPreference = publishOptions.degradationPreference.toRTCType() ?? .maintainResolution
-
-                    self.log("[publish] set degradationPreference to \(degradationPreference)")
-                    let params = transceiver.sender.parameters
-                    params.degradationPreference = NSNumber(value: degradationPreference.rawValue)
-                    // Changing params directly doesn't work so we need to update params and set it back to sender.parameters
-                    transceiver.sender.parameters = params
+                    track.applyDegradationPreference(to: transceiver.sender, publishOptions: publishOptions)
 
                     if let preferredCodec = publishOptions.preferredCodec {
                         try transceiver.set(preferredVideoCodec: preferredCodec)
